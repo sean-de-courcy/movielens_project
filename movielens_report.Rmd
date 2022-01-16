@@ -1,0 +1,28 @@
+---
+title: "Movielens Final Project"
+author: "Sean Coursey"
+date: "1/6/2022"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+This project was completed for the *Data Science: Capstone* course in HarvardX's *Data Science Professional Certificate* program on edX. The general goal of this project was to use a dataset of ten million movie ratings to create a model which could predict significantly better than chance what rating any particular user would give any particular movie. The publicly available dataset was curated by GroupLens, which is a computer science research lab at the University of Minnesota, Twin Cities. The data comes from their movielens project--which is an online, non-commercial movie recommendation system--and includes ratings from users who have rated at least 20 movies. For this project, edX provided code for producing a training set of approximately nine million observations and a validation set of approximately one million, and the specific goal of the project was to create a model using the training set which could predict the ratings in the validation set with a root mean squared error (or rmse) of less than 0.8649. I achieved an rmse of 0.797 with a model created by centering the data about the average ratings of each user and then accounting for the difference from each user's average rating using matrix factorization (enabled by the library *recosystem*).
+
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
