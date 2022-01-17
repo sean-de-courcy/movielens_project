@@ -74,15 +74,25 @@ testindex = createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE
 train <- edx[-testindex]
 test <- edx[testindex]
 rm("testindex")
+rm(edx)
+
+# Cleaning train, test, and validation sets #
+train <- train %>% select(userId, movieId, rating)
+test <- test %>% select(userId, movieId, rating)
+validation <- validation %>% select(userId, movieId, rating)
 
 # Creating table of userIds and the average rating given by that user #
 userIds <- unique(edx$userId)
-avg_rating <- numeric()
+len <- length(userIds)
+avg_rating <- vector(mode = "numeric", length = len)
 i <- 1
-for (id in userIds) {
-  avg_rating <- append(avg_rating, mean(train %>% filter(userId == id) %>% .$rating))
-  if (i %% 100 == 0) {
-    print(i)
+j <- 0
+for (id in userIds) { # WARNING: This took half an hour on my computer.
+  avg_rating[i] <- mean(train %>% filter(userId == id) %>% .$rating)
+  # Prints out percent done every percent #
+  if ((i/len*100) %/% 1 > j) {
+    j <- j + 1
+    print(j)
   }
   i <- i + 1
 }
@@ -92,12 +102,12 @@ rm(userIds, avg_rating, id)
 
 # Couldn't find a vectorizable way of treating userAvgRat as dictionary, so I made one #
 userAvgRatLookup <- function(U) {
-  avg_ratings <- numeric()
   len <- length(U)
+  avg_ratings <- vector(mode = "numeric", length = len)
   i <- 1
   j <- 0
   for (u in U) {
-    avg_ratings <- append(avg_ratings, userAvgRat[userAvgRat$user == u, ]$mu)
+    avg_ratings[i] <- userAvgRat[userAvgRat$user == u, ]$mu
     # Prints out percent done every half percent (it's a slow function) #
     if ((i/len*100) %/% 0.5 > j*2) {
       j <- j + 0.5
@@ -110,7 +120,7 @@ userAvgRatLookup <- function(U) {
 }
 
 # Centering train set using average user rating #
-# WARNING: This took my computer with 16 GB RAM around 6 hours.
+# WARNING: This took my computer around 6 hours.
 train <- train %>% mutate(delta = rating - userAvgRatLookup(userId))
 
 # Creating a recosystem object and a version of the training set compatible with it #
