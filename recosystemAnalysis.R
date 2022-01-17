@@ -120,7 +120,7 @@ userAvgRatLookup <- function(U) {
 }
 
 # Centering train set using average user rating #
-# WARNING: This took my computer around 6 hours.
+# WARNING: This took my computer around 1 hour.
 train <- train %>% mutate(delta = rating - userAvgRatLookup(userId))
 
 # Creating a recosystem object and a version of the training set compatible with it #
