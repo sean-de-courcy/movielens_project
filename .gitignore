@@ -1,3 +1,6 @@
 .Rhistory
 .RData
 ml-10M100K
+.Rproj.user
+*.Rproj
+*.txt

@@ -56,6 +56,8 @@ edx <- rbind(edx, removed)
 
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
+
+
 #######################################################################
 # The code above was provided by the edX Data Science: Capstone course.
 # The rest of the code is my own original work.
@@ -63,32 +65,37 @@ rm(dl, ratings, movies, test_index, temp, movielens, removed)
 #######################################################################
 
 # Loading libraries #
-library(tidyverse)
-library(caret)
+#library(tidyverse) -- already loaded
+#library(caret)     -- already loaded
 library(recosystem)
 library(Metrics)
 
-# Creating train and test sets #
-set.seed(2, sample.kind = "Rounding")
-testindex = createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
-train <- edx[-testindex]
-test <- edx[testindex]
-rm("testindex")
-rm(edx)
-
-# Cleaning train, test, and validation sets #
-train <- train %>% select(userId, movieId, rating)
-test <- test %>% select(userId, movieId, rating)
+# Cleaning edx and validation sets #
+edx <- edx %>% select(userId, movieId, rating)
 validation <- validation %>% select(userId, movieId, rating)
 
+# Creating train and test sets #
+set.seed(2, sample.kind = "Rounding") # to maximize reproducibility
+testindex = createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
+train <- edx[-testindex]
+temp <- edx[testindex]
+test <- temp %>% semi_join(train, by = "userId") %>% semi_join(train, by = "movieId")
+train <- rbind(train, anti_join(temp, test))
+rm(edx, temp, testindex)
+
+# Centering Data
+average = mean(train$rating)
+train <- train %>% mutate(delta = rating - average)
+variance <- sum((train$delta)^2/(length(train$delta) - 1))
+
 # Creating table of userIds and the average rating given by that user #
-userIds <- unique(edx$userId)
+userIds <- unique(train$userId)
 len <- length(userIds)
 avg_rating <- vector(mode = "numeric", length = len)
 i <- 1
 j <- 0
 for (id in userIds) { # WARNING: This took half an hour on my computer.
-  avg_rating[i] <- mean(train %>% filter(userId == id) %>% .$rating)
+  avg_rating[i] <- mean(train %>% filter(userId == id) %>% .$delta)
   # Prints out percent done every percent #
   if ((i/len*100) %/% 1 > j) {
     j <- j + 1
@@ -121,22 +128,67 @@ userAvgRatLookup <- function(U) {
 
 # Centering train set using average user rating #
 # WARNING: This took my computer around 1 hour.
-train <- train %>% mutate(delta = rating - userAvgRatLookup(userId))
+temp1 <- train %>% mutate(delta = delta - userAvgRatLookup(userId))
+variance1 <- sum((temp1$delta)^2)/(length(temp1$delta) - 1)
+
+# Doing the same thing but for movieIds
+movieIds <- unique(temp1$movieId)
+len <- length(movieIds)
+avg_rating <- vector(mode = "numeric", length = len)
+i <- 1
+j <- 0
+for (id in movieIds) {
+  avg_rating[i] <- mean(temp1 %>% filter(movieId == id) %>% .$delta)
+  if ((i/len*100) %/% 1 > j) {
+    j <- j + 1
+    print(j)
+  }
+  i <- i + 1
+}
+movieAvgRat <- data.frame(movie = movieIds, mu = avg_rating)
+rm(movieIds, avg_rating, id)
+
+movieAvgRatLookup <- function(M) {
+  len <- length(M)
+  avg_ratings <- vector(mode = "numeric", length = len)
+  i <- 1
+  j <- 0
+  for (m in M) {
+    avg_ratings[i] <- movieAvgRat[movieAvgRat$movie == m, ]$mu
+    # Prints out percent done every half percent (it's a slow function) #
+    if ((i/len*100) %/% 0.5 > j*2) {
+      j <- j + 0.5
+      print(j)
+    }
+    
+    i <- i + 1
+  }
+  return(avg_ratings)
+}
+
+temp2 <- temp1 %>% mutate(delta = delta - movieAvgRatLookup(movieId))
+rm(movieIds, avg_rating, id)
+variance2 <- sum((temp2$delta)^2)/(length(temp2$delta) - 1)
+
+percent_variance_user <- (variance - variance1)/variance*100
+percent_variance_movie <- (variance1 - variance2)/variance1*100
+
+train <- temp2
+rm(temp1, temp2, variance, variance1, variance2)
 
 # Creating a recosystem object and a version of the training set compatible with it #
 r <- Reco()
 trainReco <- data_memory(user_index = train$userId, item_index = train$movieId, rating = train$delta, index1 = TRUE)
 # Tuning the recosystem model # 
-# NOTE: This part was run multiple times to find best values.
 # WARNING: The next two sections of code use multi-threading, change "nthread"
 # if you do not have 8 CPUs.
 opts_tune <- r$tune(trainReco,
-                    opts = list(dim = c(31, 32, 33),
-                                costp_l2 = c(0.008, 0.01),
-                                costq_l2 = c(0.12, 0.13),
+                    opts = list(dim = c(10, 20, 30),
+                                costp_l2 = c(0.1, 0.01),
+                                costq_l2 = c(0.1, 0.01),
                                 costp_l1 = 0,
                                 costq_l1 = 0,
-                                lrate = c(0.12, 0.13),
+                                lrate = c(0.1, 1),
                                 nthread = 8,
                                 niter = 15,
                                 verbose = TRUE))
@@ -146,7 +198,7 @@ r$train(trainReco, opts = c(opts_tune$min, niter = 100, nthread = 8))
 # Using recosystem model to predict test set #
 testReco <- data_memory(test$userId, test$movieId, index1 = TRUE)
 testDeltPred <- r$predict(testReco, out_memory())
-testRatPred <- testDeltPred + userAvgRatLookup(test$userId)
+testRatPred <- testDeltPred + userAvgRatLookup(test$userId) + movieAvgRatLookup(test$movieId) + average
 
 # Getting initial rmse from test set: 0.799 #
 rmse(test$rating, testRatPred)
@@ -154,7 +206,7 @@ rmse(test$rating, testRatPred)
 # Initial rmse was satisfactory, moving on to validation set #
 validationReco <- data_memory(validation$userId, validation$movieId, index1 = TRUE)
 validationDeltPred <- r$predict(validationReco, out_memory())
-validationRatPred <- validationDeltPred + userAvgRatLookup(validation$userId)
+validationRatPred <- validationDeltPred + userAvgRatLookup(validation$userId) + movieAvgRatLookup(validation$movieId) + average
 
 # Getting validation rmse: 0.797 #
 # NOTE: Some randomness is involved in the training process due to

@@ -1,7 +1,7 @@
 ---
 title: "Movielens Final Project"
 author: "Sean Coursey"
-date: "1/6/2022"
+date: "2/6/2022"
 output: github_document
 ---
 
@@ -10,19 +10,77 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Introduction
-This project was completed for the *Data Science: Capstone* course in HarvardX's *Data Science Professional Certificate* program on edX. The general goal of this project was to use a dataset of ten million movie ratings to create a model which could predict significantly better than chance what rating any particular user would give any particular movie. The publicly available dataset was curated by GroupLens, which is a computer science research lab at the University of Minnesota, Twin Cities. The data comes from their movielens project--which is an online, non-commercial movie recommendation system--and includes ratings from users who have rated at least 20 movies. For this project, edX provided code for producing a training set of approximately nine million observations and a validation set of approximately one million, and the specific goal of the project was to create a model using the training set which could predict the ratings in the validation set with a root mean squared error (or rmse) of less than 0.8649. I achieved an rmse of 0.797 with a model created by centering the data about the average ratings of each user and then accounting for the difference from each user's average rating using matrix factorization (enabled by the library *recosystem*).
+This project was completed for the *Data Science: Capstone* course in HarvardX's *Data Science Professional Certificate* program on edX. The general goal of this project was to use a dataset of ten million movie ratings to create a model which could predict significantly better than chance what rating any particular user would give any particular movie. The publicly available dataset was curated by GroupLens, which is a computer science research lab at the University of Minnesota, Twin Cities. The data comes from their movielens project--which is an online, non-commercial movie recommendation system--and includes ratings from users who have rated at least 20 movies. For this project, HarvardX provided code for producing a training set of approximately nine million observations and a validation set of approximately one million, and the specific goal of the project was to create a model using the training set which could predict the ratings in the validation set with a root mean squared error (or rmse) of less than 0.8649. The model described in this report achieved an rmse of 0.797 by centering the data about the average ratings of each user and then accounting for the difference from each user's average rating using matrix factorization (enabled by the library *recosystem*).
 
 
-```{r cars}
-summary(cars)
+## Methods
+The following libraries were used in this analysis:
+
+```{r libraries, results=FALSE, message=FALSE}
+library(tidyverse)
+library(caret)
+library(data.table)
+library(recosystem)
+library(Metrics)
 ```
 
-## Including Plots
+Firstly, the code provided by HarvardX was used to download the data from GroupLens and partition it into training and validation data tables--named `edx` and `validation`, respectively.
+Each observation in these data sets includes six variables:
 
-You can also embed plots, for example:
+```{r hidden initialization, echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 3.6 or earlier:
+# movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+#                                           title = as.character(title),
+#                                           genres = as.character(genres))
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r initial data structure}
+validation[42]
+```
+
+Matrix factorization is an unsupervised numerical method, which means the character variables `title` and `genres` are difficult to include usefully. While key-word analysis of `title` and `genres` could produce meaningful results which could theoretically be numericized, this process was deemed far too difficult and memory-intensive to justify for the marginal benefits it could produce. Similarly, `timestamp`--while numerical--was reasoned to not include enough useful information to be worth including in the matrix factorization. Following this reasoning, the `edx` and `validation` data tables were modified to only include `userId`, `movieId`, and `rating`. Then, the edx table was partitioned into a training set (`train`) and a testing set (`test`) so a model could be created and tested without using the validation set.
+
+```{r hidden data wrangling, echo = FALSE, results = FALSE, message = FALSE, warning = FALSE}
+validation <- validation %>% select(userId, movieId, rating)
+edx <- edx %>% select(userId, movieId, rating)
+set.seed(2, sample.kind = "Rounding") # to maximize reproducibility
+testindex = createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
+train <- edx[-testindex]
+test <- edx[testindex]
+rm(testindex)
+rm(edx)
+```
+
