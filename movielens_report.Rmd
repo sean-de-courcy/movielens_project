@@ -10,13 +10,14 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Introduction
-This project was completed for the *Data Science: Capstone* course in HarvardX's *Data Science Professional Certificate* program on edX. The general goal of this project was to use a dataset of ten million movie ratings to create a model which could predict significantly better than chance what rating any particular user would give any particular movie. The publicly available dataset was curated by GroupLens, which is a computer science research lab at the University of Minnesota, Twin Cities. The data comes from their movielens project--which is an online, non-commercial movie recommendation system--and includes ratings from users who have rated at least 20 movies. For this project, HarvardX provided code for producing a training set of approximately nine million observations and a validation set of approximately one million, and the specific goal of the project was to create a model using the training set which could predict the ratings in the validation set with a root mean squared error (or rmse) of less than 0.8649. The model described in this report achieved an rmse of 0.797 by centering the data about the average ratings of each user and then accounting for the difference from each user's average rating using matrix factorization (enabled by the library *recosystem*).
 
+This project was completed for the *Data Science: Capstone* course in HarvardX’s *Data Science Professional Certificate* program on edX. The general goal of this project was to use a dataset of ten million movie ratings to create a model which could predict, significantly better than chance, what rating any particular user would give any particular movie. The publicly available dataset was curated by GroupLens, which is a computer science research lab at the University of Minnesota, Twin Cities. The data comes from their movielens project–which is an online, non-commercial movie recommendation system–and includes ratings from users who have rated at least 20 movies. For this project, HarvardX provided code for producing a training set of approximately nine million observations and a validation set of approximately one million, and the specific goal of the project was to create a model using the training set which could predict the ratings in the validation set with a root mean squared error (or rmse) of less than 0.8649. The model described in this report achieved an rmse of 0.794 by centering the data, accounting for the average ratings of each user and of each movie, then accounting for the remaining variation using matrix factorization (enabled by the library *recosystem*).
 
 ## Methods
+
 The following libraries were used in this analysis:
 
-```{r libraries, results=FALSE, message=FALSE}
+```{r libraries, results=FALSE, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(caret)
 library(data.table)
@@ -24,10 +25,29 @@ library(recosystem)
 library(Metrics)
 ```
 
-Firstly, the code provided by HarvardX was used to download the data from GroupLens and partition it into training and validation data tables--named `edx` and `validation`, respectively.
-Each observation in these data sets includes six variables:
+Firstly, the code provided by HarvardX was used to download the data from GroupLens and partition it into training and validation data tables–named `edx` and `validation`, respectively. Each observation in these data sets includes six variables:
 
-```{r hidden initialization, echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+```{r hidden1, include = FALSE}
+options(timeout = 10000) # So that the program can deal with the huge dataset without timing out
+
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
 dl <- tempfile()
 download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
 
@@ -67,20 +87,256 @@ edx <- rbind(edx, removed)
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
 ```
 
-```{r initial data structure}
-validation[42]
+```{r}
+edx[42]
 ```
 
-Matrix factorization is an unsupervised numerical method, which means the character variables `title` and `genres` are difficult to include usefully. While key-word analysis of `title` and `genres` could produce meaningful results which could theoretically be numericized, this process was deemed far too difficult and memory-intensive to justify for the marginal benefits it could produce. Similarly, `timestamp`--while numerical--was reasoned to not include enough useful information to be worth including in the matrix factorization. Following this reasoning, the `edx` and `validation` data tables were modified to only include `userId`, `movieId`, and `rating`. Then, the edx table was partitioned into a training set (`train`) and a testing set (`test`) so a model could be created and tested without using the validation set.
+For the purpose of matrix factorization, the `timestamp`, `title`, and `genres` metadata are not helpful, so they were removed from the `edx` and `validation` data tables–leaving only `userId`, `movieId`, and `rating`. The `title` and `genres` metadata for each movie identification number were saved in a data table for later use in interpretting the result of the matrix factorization. The edx table was further partitioned into a training set (`train`) and a testing set (`test`) so a model could be created and tested without using the validation set.
 
-```{r hidden data wrangling, echo = FALSE, results = FALSE, message = FALSE, warning = FALSE}
-validation <- validation %>% select(userId, movieId, rating)
+Before proceeding to factorization, the data in the `train` set was centered by subtracting the overall average rating, and then each row was centered by `userId` and by `movieId`. To accomplish this centering, and for later use in creating the final model, lookup functions `userAvgRatLookup` and `movieAvgRatLookup` were defined for getting the average rating for each user and each movie. The average rating for a movie could be interpreted as its general level of quality while the average rating for a user could be interpreted as their general disposition. There is a strong case for these factors of general movie quality and user disposition being important, considering they account for approximately 20 percent and 16 percent of the variation in the data, respectively, when analyzed indepedently and 32 percent when analyzed concurrently.
+
+```{r hidden2, include = FALSE}
+if(!require(recosystem)) install.packages("recosystem", repos = "http://cran.us.r-project.org")
+if(!require(Metrics)) install.packages("Metrics", repos = "http://cran.us.r-project.org")
+library(recosystem)
+library(Metrics)
+
+movieIdMeta <- edx %>% select(movieId, title, genres)
+movieIdMeta <- unique(movieIdMeta, by = "movieId")
+
+# Cleaning edx and validation sets #
 edx <- edx %>% select(userId, movieId, rating)
+validation <- validation %>% select(userId, movieId, rating)
+
+# Creating train and test sets #
 set.seed(2, sample.kind = "Rounding") # to maximize reproducibility
 testindex = createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
 train <- edx[-testindex]
-test <- edx[testindex]
-rm(testindex)
-rm(edx)
+temp <- edx[testindex]
+test <- temp %>% semi_join(train, by = "userId") %>% semi_join(train, by = "movieId")
+train <- rbind(train, anti_join(temp, test))
+rm(edx, temp, testindex)
+```
+```{r hidden3, include = FALSE}
+# Creating table of userIds and the average rating given by that user #
+userIds <- unique(train$userId)
+len <- length(userIds)
+avg_rating <- vector(mode = "numeric", length = len)
+i <- 1
+j <- 0
+for (id in userIds) { # WARNING: This took half an hour on my computer.
+  avg_rating[i] <- mean(train %>% filter(userId == id) %>% .$delta)
+  # Prints out percent done every percent #
+  if ((i/len*100) %/% 1 > j) {
+    j <- j + 1
+    print(j)
+  }
+  i <- i + 1
+}
+userAvgRat <- data.frame(user = userIds, mu = avg_rating)
+
+rm(userIds, avg_rating, id)
+
+# Couldn't find a vectorizable way of treating userAvgRat as dictionary, so I made one #
+userAvgRatLookup <- function(U) {
+  len <- length(U)
+  avg_ratings <- vector(mode = "numeric", length = len)
+  i <- 1
+  j <- 0
+  for (u in U) {
+    avg_ratings[i] <- userAvgRat[userAvgRat$user == u, ]$mu
+    # Prints out percent done every half percent (it's a slow function) #
+    if ((i/len*100) %/% 0.5 > j*2) {
+      j <- j + 0.5
+      print(j)
+    }
+    
+    i <- i + 1
+  }
+  return(avg_ratings)
+}
+```
+```{r hidden4, include = FALSE}
+# Doing the same thing but for movieIds
+movieIds <- unique(userCentered$movieId)
+len <- length(movieIds)
+avg_rating <- vector(mode = "numeric", length = len)
+i <- 1
+j <- 0
+for (id in movieIds) {
+  avg_rating[i] <- mean(userCentered %>% filter(movieId == id) %>% .$delta)
+  if ((i/len*100) %/% 1 > j) {
+    j <- j + 1
+    print(j)
+  }
+  i <- i + 1
+}
+movieAvgRat <- data.frame(movie = movieIds, mu = avg_rating)
+rm(movieIds, avg_rating, id)
+
+movieAvgRatLookup <- function(M) {
+  len <- length(M)
+  avg_ratings <- vector(mode = "numeric", length = len)
+  i <- 1
+  j <- 0
+  for (m in M) {
+    avg_ratings[i] <- movieAvgRat[movieAvgRat$movie == m, ]$mu
+    # Prints out percent done every half percent (it's a slow function) #
+    if ((i/len*100) %/% 0.5 > j*2) {
+      j <- j + 0.5
+      print(j)
+    }
+    
+    i <- i + 1
+  }
+  return(avg_ratings)
+}
+```
+```{r centering, results = FALSE, message = FALSE}
+# Centering Data
+average = mean(train$rating)
+train <- train %>% mutate(delta = rating - average)
+
+# Centering rows using average user rating #
+userCentered <- train %>% mutate(delta = delta - userAvgRatLookup(userId))
+
+# Centering rows using average movie rating #
+movieCentered <- train %>% mutate(delta = delta - movieAvgRatLookup(movieId))
+```
+```{r percent-variance-usermovie-ind, message = FALSE}
+# Calculating percent variance explained independently #
+percent_variance_user <- (var(train$delta) - var(userCentered))/var(train$delta)*100
+percent_variance_movie <- (var(train$delta) - var(movieCentered))/var(train$delta)*100
+```
+```{r output1, echo = FALSE}
+percent_variance_user
+percent_variance_movie
+```
+```{r centered-train, results = FALSE, message = FALSE}
+old_variance <- var(train$delta)
+
+# Centering rows using both average movie and average user rating #
+train <- train %>% mutate(delta = movieCentered$delta + userCentered$delta - delta)
+```
+```{r percent-variance-usermovie-cum, message = FALSE}
+# Calculating percent variance explained together #
+percent_variance_usermovie <- (old_variance - var(train$delta))/old_variance*100
+```
+```{r output2, echo = FALSE}
+percent_variance_usermovie
+```
+```{r hidden5, include = FALSE}
+rm(userCentered, movieCentered, old_variance)
+rm(i, j, len)
 ```
 
+Now the data was ready for factorization. Passing the data into a recosystem format and using the `r$tune` and `r$train` functions produced a factorized model `r`. When tuning, a range of values were used for the number of factors, L2 loss, and learning rate, with the other values held constant. The upper limit on the number of factors was decided considering the computation time it would take to try larger values, and L1 loss was ignored because of its propensity for overfitting. Also, L2 loss minimizes the sum of squares while L1 loss minimizes linearly, and the overall goal of the project was to minimize squared error. To be sure the model was effective and not overfitted, it was applied to the `test` set and produced a satisfactory rmse of 0.795.
+
+```{r hidden7, include = FALSE}
+# Creating a recosystem object and a version of the training set compatible with it #
+r <- Reco()
+trainReco <- data_memory(user_index = train$userId, item_index = train$movieId, rating = train$delta, index1 = TRUE)
+# Tuning the recosystem model # 
+# WARNING: The next two sections of code use multi-threading, change "nthread"
+# if you do not have 8 CPU cores.
+opts_tune <- r$tune(trainReco,
+                    opts = list(dim = c(10, 20, 30),
+                                costp_l2 = c(0.1, 0.01),
+                                costq_l2 = c(0.1, 0.01),
+                                costp_l1 = 0,
+                                costq_l1 = 0,
+                                lrate = c(0.1, 1),
+                                nthread = 8,
+                                niter = 15,
+                                verbose = TRUE))
+# Training recosystem model with optimal options #
+r$train(trainReco, opts = c(opts_tune$min, niter = 50, nthread = 8))
+
+r_mat <- r$output(out_P = out_memory(), out_Q = out_memory())
+```
+```{r testing, results = FALSE, message = FALSE}
+# Using recosystem model to predict test set #
+testReco <- data_memory(test$userId, test$movieId, index1 = TRUE)
+testDeltPred <- r$predict(testReco, out_memory())
+testRatPred <- testDeltPred + userAvgRatLookup(test$userId) +
+               movieAvgRatLookup(test$movieId) + average
+```
+```{r}
+# Getting initial rmse from test set: ~0.795 #
+rmse(test$rating, testRatPred)
+```
+
+## Results
+
+After determining the model as satisfactory, the factors were analyzed independently, cumulatively, and dependently for the percent variance they explained of `train$delta`. Cumulatively, the factors explained about
+30 percent of the remaining variation in the `train` data. The two most important factors were used to make a plot of the movies--colored by genre:
+
+```{r hidden8, include = FALSE}
+# Lookup function for the delta contribution of the nth factor $
+nthFactorLookup <- function(U, M, n, upTo = FALSE) {
+  len <- length(U)
+  products <- vector(mode = "numeric", length = len)
+  I <- 1:len
+  if (upTo) {
+    for (i in I) {
+      products[i] <- sum(r_mat$P[U[i], 1:n]*r_mat$Q[M[i], 1:n])
+    }
+  } else {
+    for (i in I) {
+      products[i] <- r_mat$P[U[i],n]*r_mat$Q[M[i],n]
+    }
+  }
+  return(products)
+}
+
+# Calculating the variance explained by each factor independently #
+len <- length(r_mat$P[1,])
+percent_var_ind <- vector(mode = "numeric", length = len)
+I <- 1:len
+for (i in I) {
+  temp <- train %>% mutate(delta = delta - nthFactorLookup(userId, movieId, i))
+  percent_var_ind[i] <- (var(train$delta) - var(temp$delta))/var(train$delta)*100
+}
+
+# Calculating the variance explained by the factors cumulatively #
+percent_var_cum <- vector(mode = "numeric", length = len)
+for (i in I) {
+  temp <- train %>% mutate(delta = delta - nthFactorLookup(userId, movieId, i, TRUE))
+  percent_var_cum[i] <- (var(train$delta) - var(temp$delta))/var(train$delta)*100
+}
+
+# Calculating the variance uniquely explained by each factor #
+percent_var_dep <- vector(mode = "numeric", length = len)
+percent_var_dep[1] = percent_var_cum[1]
+for (i in 2:len) {
+  percent_var_dep[i] = percent_var_cum[i] - percent_var_cum[i-1]
+}
+```
+```{r graph, echo = FALSE}
+movie_data_2factors <- movieIdMeta %>% mutate(X1 = r_mat$Q[movieId, which.max(percent_var_ind)], X2 = r_mat$Q[movieId, order(percent_var_ind)[29]], genres = str_extract(genres, "^[:alpha:]+(?=\\|)"))
+plot_2factor <- movie_data_2factors %>% ggplot(aes(x = X1, y = X2, color = genres)) + geom_point(alpha = 0.2)
+plot_2factor
+```
+
+Unfortunately, the factors did not produce an easily interpretable graph; there were no discernable discrete groups in the movies. Interestingly, there was not even a visible correlation between any of the genres and the scores on any of the factors. A t-sne plot (which is designed to highlight grouping characteristics in many-dimensional data) using all thirty factors did not produce any discernable structure. It appears that the movies were continuously spread out for each factor. Interpretation by inspection of the movies ordered by the most important factor also provided no insight--whatever patterns the factorization was describing were inscrutable to this author.
+
+Finally, the model was applied to the validation set, producing an rmse of 0.794.
+
+```{r validation, results = FALSE, message = FALSE}
+# Initial rmse was satisfactory, moving on to validation set #
+validationReco <- data_memory(validation$userId, validation$movieId, index1 = TRUE)
+validationDeltPred <- r$predict(validationReco, out_memory())
+validationRatPred <- validationDeltPred + userAvgRatLookup(validation$userId) + movieAvgRatLookup(validation$movieId) + average
+```
+```{r}
+# Getting validation rmse: 0.794 #
+# NOTE: Some randomness is involved in the training process due to
+# multi-threading, so the exact value varies slightly.
+rmse(validation$rating, validationRatPred)
+```
+
+The model was successful, consistently producing an rmse below 0.8--significantly below the goal of 0.865.
+
+## Conclusion
+
+The model described in this report successfully predicts movie ratings in the 10M MovieLens dataset with an rmse below 0.865 by accounting for the general quality of the movie, the base disposition of the user, and then using thirty factors to account for interactions between the movie's attributes and the user's preferences. The main strength of this model is its accuracy, while its main drawback is how resistent it is to interpretation. Because the goal of this project was accuracy, this model is a success; however, it does not shine almost any light on the structure of the data it predicts. The only easily interpretable part of the model is that the general quality of each movie and the base disposition of each user are extremely important--explaining 32 percent of the variance. The best interpretation this author can make of the matrix factorization is that the movies in this dataset come in a continuous variety, without particular useful or meaningful groupings. More effort in analyzing the most important factors could perhaps lead to a recognition of what patterns the machine-learning was latching on to, but initial attempts have not been illuminating. This author remains unconvinced that there are not meaninful groupings to be found within the data, and perhaps a future analysis, using a k-nearest-neighbors approach to group movies and users combined with a model for the interactions between those groups, could provide predictions while also highlighting interpretable structure in the data.
